@@ -7,17 +7,29 @@ import { Check } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import LinearGradient from 'react-native-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
 import { useAuth } from '../context/AppContext';
-import { API } from '../services/api';
+import { API, BASE_URL } from '../services/api';
 
 interface AIInvestingScreenProps {
   navigation: NativeStackNavigationProp<any>;
 }
 
-type FlowState = 'setup' | 'agreement' | 'active';
+type FlowState = 'setup' | 'agreement' | 'list';
 
-const BASE_URL = 'http://172.30.55.184:8000';
+interface SavedInvestment {
+  id: number;
+  amountText: string;
+  months: number;
+  aiPlan: any;
+  status: 'active' | 'paused' | 'stopped';
+  conservReturn: number;
+  optimReturn: number;
+  conservPct: string;
+  optimPct: string;
+  createdAt: string;
+}
 
 const CONSERVATIVE_RATE = 0.124;
 const OPTIMISTIC_RATE   = 0.178;
@@ -140,16 +152,21 @@ function HeroAnim() {
 
 // ─── Active Investment Card ───────────────────────────────────────────────────
 
-function ActiveInvestmentCard({ inv, onViewDetails }: {
+function ActiveInvestmentCard({ inv, status, onViewDetails }: {
   inv: { id: number; amountSAR: string; daysAgo: number; returnMin: string; returnMax: string; durationDone: number; durationTotal: number; sparkData: number[] };
+  status: 'active' | 'paused';
   onViewDetails: () => void;
 }) {
+  const isPaused = status === 'paused';
   const progress = inv.durationDone / inv.durationTotal;
   return (
     <View style={card.wrap}>
       <View style={card.topRow}>
         <Text style={card.name}>Investment #{inv.id}</Text>
-        <View style={card.statusPill}><View style={card.statusDot} /><Text style={card.statusText}>Active</Text></View>
+        <View style={[card.statusPill, isPaused && card.statusPillPaused]}>
+          <View style={[card.statusDot, isPaused && card.statusDotPaused]} />
+          <Text style={[card.statusText, isPaused && card.statusTextPaused]}>{isPaused ? 'Paused' : 'Active'}</Text>
+        </View>
       </View>
       <Text style={card.amount}>{inv.amountSAR} SAR</Text>
       <Text style={card.startedAgo}>started {inv.daysAgo} days ago</Text>
@@ -172,8 +189,11 @@ const card = StyleSheet.create({
   topRow: { flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:10 },
   name: { color:colors.white, fontSize:15, fontWeight:'700' },
   statusPill: { flexDirection:'row', alignItems:'center', gap:5, backgroundColor:'rgba(16,185,129,0.15)', paddingHorizontal:10, paddingVertical:4, borderRadius:20 },
+  statusPillPaused: { backgroundColor:'rgba(245,158,11,0.15)' },
   statusDot: { width:6, height:6, borderRadius:3, backgroundColor:colors.green },
+  statusDotPaused: { backgroundColor:colors.amber },
   statusText: { color:colors.green, fontSize:12, fontWeight:'600' },
+  statusTextPaused: { color:colors.amber },
   amount: { color:colors.white, fontSize:20, fontWeight:'700', marginBottom:2 },
   startedAgo: { color:colors.gray500, fontSize:12, marginBottom:10 },
   estReturn: { color:colors.gray400, fontSize:13, marginBottom:10 },
@@ -190,6 +210,7 @@ const card = StyleSheet.create({
 export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps) {
   const { userId } = useAuth();
   const [flowState, setFlowState]               = useState<FlowState>('setup');
+  const [investments, setInvestments]           = useState<SavedInvestment[]>([]);
   const [amountText, setAmountText]             = useState('5000');
   const [months, setMonths]                     = useState(6);
   const [howItWorksVisible, setHowItWorksVisible] = useState(false);
@@ -198,6 +219,9 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
   const [loadingPlan, setLoadingPlan]           = useState(false);
   const [cashBalance, setCashBalance]           = useState<number>(0);
   const [executing, setExecuting]               = useState(false);
+  const [restored, setRestored]                 = useState(false);
+
+  const storageKey = `investments_${userId}`;
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
@@ -208,8 +232,34 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
   }, []);
 
   useEffect(() => {
+    const restore = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(storageKey);
+        if (saved) {
+          const list: SavedInvestment[] = JSON.parse(saved);
+          setInvestments(list);
+          if (list.some(i => i.status !== 'stopped')) setFlowState('list');
+        }
+      } catch {}
+      setRestored(true);
+    };
+    restore();
+  }, [userId]);
+
+  useEffect(() => {
     fetch(`${BASE_URL}/portfolio/${userId ?? ''}`).then(r=>r.json()).then(d=>setCashBalance(d?.cash_balance??0)).catch(()=>{});
   }, []);
+
+  useEffect(() => {
+    const reload = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(storageKey);
+        if (saved) setInvestments(JSON.parse(saved));
+      } catch {}
+    };
+    const unsub = navigation.addListener('focus', reload);
+    return unsub;
+  }, [navigation, userId]);
 
   useEffect(() => {
     const fetchPlan = async () => {
@@ -232,14 +282,40 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
   }, [amountText, months]);
 
   const handleConfirmInvestment = async () => {
-    if (!agreed || !aiPlan) return;
+    if (!agreed) return;
     setExecuting(true);
     try {
-      const result = await API.executePlan(userId ?? '', aiPlan);
-      if (!result?.success) {
-        Alert.alert('تنبيه', 'تم تنفيذ بعض الصفقات جزئياً. تحقق من سجل التداول.');
+      if (aiPlan) {
+        const result = await API.executePlan(userId ?? '', aiPlan);
+        if (!result?.success) {
+          Alert.alert('تنبيه', 'تم تنفيذ بعض الصفقات جزئياً. تحقق من سجل التداول.');
+        }
       }
-      setFlowState('active');
+      const amt = parseInt(amountText.replace(/[^0-9]/g, ''), 10) || 5000;
+      const cR = aiPlan?.estimated_return?.conservative_sar ?? Math.round(amt * CONSERVATIVE_RATE * (months / BASE_MONTHS));
+      const oR = aiPlan?.estimated_return?.optimistic_sar   ?? Math.round(amt * OPTIMISTIC_RATE   * (months / BASE_MONTHS));
+      const cP = aiPlan?.estimated_return?.conservative_pct ?? (CONSERVATIVE_RATE * (months / BASE_MONTHS) * 100).toFixed(1);
+      const oP = aiPlan?.estimated_return?.optimistic_pct   ?? (OPTIMISTIC_RATE   * (months / BASE_MONTHS) * 100).toFixed(1);
+
+      const newInv: SavedInvestment = {
+        id: Date.now(),
+        amountText,
+        months,
+        aiPlan,
+        status: 'active',
+        conservReturn: cR,
+        optimReturn: oR,
+        conservPct: String(cP),
+        optimPct: String(oP),
+        createdAt: new Date().toISOString(),
+      };
+
+      const saved = await AsyncStorage.getItem(storageKey);
+      const existing: SavedInvestment[] = saved ? JSON.parse(saved) : [];
+      const updated = [...existing, newInv];
+      await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+      setInvestments(updated);
+      setFlowState('list');
     } catch (e: any) {
       Alert.alert('تعذر التنفيذ', e.message || 'تحقق من رصيدك وحاول مجدداً.');
     } finally {
@@ -252,25 +328,33 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
   const optimReturn   = aiPlan?.estimated_return?.optimistic_sar   ?? Math.round(amount * OPTIMISTIC_RATE   * (months / BASE_MONTHS));
   const conservPct    = aiPlan?.estimated_return?.conservative_pct ?? (CONSERVATIVE_RATE * (months / BASE_MONTHS) * 100).toFixed(1);
   const optimPct      = aiPlan?.estimated_return?.optimistic_pct   ?? (OPTIMISTIC_RATE   * (months / BASE_MONTHS) * 100).toFixed(1);
-  const allocations   = aiPlan?.sector_allocation ?? [
-    { sector: 'Energy', allocation_pct: 40 },
-    { sector: 'Finance', allocation_pct: 35 },
-    { sector: 'Technology', allocation_pct: 25 },
-  ];
+  const allocations   = aiPlan?.sector_allocation ?? [];
 
-  // بيانات الكاردات في الـ active state — تعتمد على الخطة الحقيقية
-  const activeInvestments = [
-    {
-      id: 1,
-      amountSAR: formatAmount(amount || 5000),
-      daysAgo: 14,
-      returnMin: formatAmount(conservReturn || 620),
-      returnMax: formatAmount(optimReturn || 890),
-      durationDone: Math.max(1, Math.floor(months / 2)),
-      durationTotal: months || 6,
-      sparkData: [100,102,101,104,107,105,108,110,109,113,115,112,116,120],
-    },
-  ];
+  const visibleInvestments = investments
+    .filter(i => i.status !== 'stopped')
+    .map(i => {
+      const daysAgo = Math.max(0, Math.floor((Date.now() - new Date(i.createdAt).getTime()) / 86400000));
+      const durationDone = Math.max(1, Math.floor(daysAgo / 30));
+      return {
+        id: i.id,
+        amountSAR: formatAmount(parseInt(i.amountText) || 5000),
+        daysAgo,
+        returnMin: formatAmount(i.conservReturn),
+        returnMax: formatAmount(i.optimReturn),
+        durationDone: Math.min(durationDone, i.months),
+        durationTotal: i.months,
+        sparkData: [100,102,101,104,107,105,108,110,109,113,115,112,116,120],
+        status: i.status,
+      };
+    });
+
+  if (!restored) {
+    return (
+      <SafeAreaView style={[styles.container, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator size="large" color={colors.accent} />
+      </SafeAreaView>
+    );
+  }
 
   // ── SETUP ──────────────────────────────────────────────────────────────────
   if (flowState === 'setup') {
@@ -278,7 +362,10 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
       <SafeAreaView style={styles.container}>
         <HowItWorksModal visible={howItWorksVisible} onClose={() => setHowItWorksVisible(false)} />
         <View style={styles.topBar}>
-          <Text style={styles.topBarTitle}>Grow for me</Text>
+          {visibleInvestments.length > 0
+            ? <TouchableOpacity onPress={() => setFlowState('list')} activeOpacity={0.7}><Text style={{ color: colors.accent, fontSize: 15, fontWeight: '600' }}>← My investments</Text></TouchableOpacity>
+            : <Text style={styles.topBarTitle}>Grow for me</Text>
+          }
           <TouchableOpacity style={styles.infoBtn} activeOpacity={0.7} onPress={() => setHowItWorksVisible(true)}>
             <Text style={styles.infoIcon}>ⓘ</Text>
           </TouchableOpacity>
@@ -387,26 +474,36 @@ export default function AIInvestingScreen({ navigation }: AIInvestingScreenProps
     );
   }
 
-  // ── ACTIVE ─────────────────────────────────────────────────────────────────
+  // ── LIST ───────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
       <View style={act.headerRow}>
         <Text style={act.title}>My investments</Text>
-        <TouchableOpacity onPress={() => setFlowState('setup')} activeOpacity={0.75}>
+        <TouchableOpacity onPress={() => {
+          setAmountText('5000');
+          setMonths(6);
+          setAiPlan(null);
+          setAgreed(false);
+          setFlowState('setup');
+        }} activeOpacity={0.75}>
           <Text style={act.newBtn}>Start a new one +</Text>
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={act.scroll} showsVerticalScrollIndicator={false}>
-        {activeInvestments.map(inv => (
-          <ActiveInvestmentCard
-            key={inv.id}
-            inv={inv}
-            onViewDetails={() => navigation.navigate('InvestmentDetail', {
-              investmentId: inv.id,
-              planData: aiPlan,
-            })}
-          />
-        ))}
+        {visibleInvestments.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingTop: 60 }}>
+            <Text style={{ color: colors.gray500, fontSize: 14 }}>No active investments</Text>
+          </View>
+        ) : (
+          visibleInvestments.map(inv => (
+            <ActiveInvestmentCard
+              key={inv.id}
+              inv={inv}
+              status={inv.status as 'active' | 'paused'}
+              onViewDetails={() => navigation.navigate('InvestmentDetail', { investmentId: inv.id })}
+            />
+          ))
+        )}
       </ScrollView>
     </SafeAreaView>
   );

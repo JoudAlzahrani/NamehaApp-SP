@@ -6,8 +6,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
-import { API } from '../services/api';
+import { API, BASE_URL } from '../services/api';
 import { useAuth } from '../context/AppContext';
 
 interface InvestmentDetailScreenProps {
@@ -15,14 +16,38 @@ interface InvestmentDetailScreenProps {
   route: RouteProp<any>;
 }
 
-const BASE_URL = 'http://172.30.55.184:8000';
-
 const SECTOR_COLORS: Record<string, string> = {
   Energy: colors.amber, Finance: '#3B82F6',
   Technology: '#8B5CF6', Healthcare: colors.green,
   'Real Estate': colors.accent, Materials: '#F97316',
   Telecom: '#EC4899', Utilities: '#14B8A6',
 };
+
+const SYMBOL_SECTORS: Record<string, string> = {
+  '2222': 'Energy', '2060': 'Energy', 'XOM': 'Energy', 'CVX': 'Energy', 'COP': 'Energy', 'SLB': 'Energy',
+  '2010': 'Materials',
+  '1120': 'Finance', '1180': 'Finance', '1150': 'Finance', 'JPM': 'Finance', 'BAC': 'Finance', 'WFC': 'Finance', 'GS': 'Finance',
+  '7010': 'Telecom', '7020': 'Telecom', '7030': 'Telecom', 'T': 'Telecom', 'VZ': 'Telecom', 'TMUS': 'Telecom',
+  '2082': 'Utilities', '4030': 'Utilities', 'NEE': 'Utilities', 'DUK': 'Utilities', 'SO': 'Utilities',
+  '4002': 'Healthcare', '4004': 'Healthcare', 'JNJ': 'Healthcare', 'UNH': 'Healthcare', 'PFE': 'Healthcare', 'ABBV': 'Healthcare',
+  '4020': 'Real Estate', 'AMT': 'Real Estate', 'PLD': 'Real Estate',
+  'AAPL': 'Technology', 'MSFT': 'Technology', 'NVDA': 'Technology', 'TSLA': 'Technology', 'GOOGL': 'Technology', 'AMZN': 'Technology', 'EQIX': 'Technology',
+};
+
+function calcSectorAllocation(positions: { symbol: string; quantity: number; avg_price: number }[]) {
+  const sectorValues: Record<string, number> = {};
+  let total = 0;
+  for (const p of positions) {
+    const sector = SYMBOL_SECTORS[p.symbol] ?? 'Other';
+    const val = p.quantity * p.avg_price;
+    sectorValues[sector] = (sectorValues[sector] ?? 0) + val;
+    total += val;
+  }
+  if (total === 0) return null;
+  return Object.entries(sectorValues)
+    .map(([sector, val]) => ({ sector, allocation_pct: Math.round((val / total) * 100) }))
+    .sort((a, b) => b.allocation_pct - a.allocation_pct);
+}
 
 const COMPANY_NAMES: Record<string, string> = {
   '2222': 'Saudi Aramco', '2010': 'Saudi Basic Industries', '1120': 'Al Rajhi Bank',
@@ -65,29 +90,45 @@ function GrowthChart({ data }: { data: number[] }) {
 
 export default function InvestmentDetailScreen({ navigation, route }: InvestmentDetailScreenProps) {
   const { userId } = useAuth();
-  const investmentId = (route?.params?.investmentId as number) ?? 1;
-  const planData     = route?.params?.planData as any;
+  const investmentId = (route?.params?.investmentId as number) ?? 0;
 
-  const [loading, setLoading]   = useState(!planData);
-  const [aiPlan, setAiPlan]     = useState<any>(planData ?? null);
+  const [loading, setLoading] = useState(true);
+  const [savedInv, setSavedInv]       = useState<any>(null);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [paused, setPaused]           = useState(false);
+  const [realAllocation, setRealAllocation] = useState<any[] | null>(null);
+
+  const invStorageKey = `investments_${userId}`;
+
+  const updateStatus = async (newStatus: 'active' | 'paused' | 'stopped') => {
+    try {
+      const saved = await AsyncStorage.getItem(invStorageKey);
+      if (!saved) return;
+      const list = JSON.parse(saved);
+      const updated = list.map((i: any) => i.id === investmentId ? { ...i, status: newStatus } : i);
+      await AsyncStorage.setItem(invStorageKey, JSON.stringify(updated));
+    } catch {}
+  };
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        // جيب التراكزشنز من الباكند
-        const portfolio = await API.getPortfolio(userId ?? '');
+        const [portfolio, savedStr] = await Promise.all([
+          API.getPortfolio(userId ?? ''),
+          AsyncStorage.getItem(invStorageKey),
+        ]);
         setTransactions((portfolio?.transactions ?? []).slice(-3).reverse());
 
-        // جيب الخطة إذا ما اتمررت
-        if (!planData) {
-          const res = await fetch(`${BASE_URL}/ai-analysis/autoinvest`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId ?? '', amount_sar: 5000, duration_months: 6 }),
-          });
-          const data = await res.json();
-          if (data?.success) setAiPlan(data.data);
+        const computed = calcSectorAllocation(portfolio?.positions ?? []);
+        if (computed) setRealAllocation(computed);
+
+        if (savedStr) {
+          const list = JSON.parse(savedStr);
+          const inv = list.find((i: any) => i.id === investmentId);
+          if (inv) {
+            setSavedInv(inv);
+            if (inv.status === 'paused') setPaused(true);
+          }
         }
       } catch {}
       finally { setLoading(false); }
@@ -95,37 +136,45 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
     loadData();
   }, []);
 
-  const amount       = aiPlan?.amount_sar ?? 5000;
-  const durationMonths = aiPlan?.duration_months ?? 6;
-  const conservReturn = aiPlan?.estimated_return?.conservative_sar ?? Math.round(amount * 0.124);
-  const optimReturn   = aiPlan?.estimated_return?.optimistic_sar   ?? Math.round(amount * 0.178);
-  const conservPct    = aiPlan?.estimated_return?.conservative_pct ?? '12.4';
-  const optimPct      = aiPlan?.estimated_return?.optimistic_pct   ?? '17.8';
-  const allocations   = aiPlan?.sector_allocation ?? [
-    { sector: 'Energy', allocation_pct: 40 },
-    { sector: 'Finance', allocation_pct: 35 },
-    { sector: 'Technology', allocation_pct: 25 },
-  ];
+  const rawAmount    = savedInv ? (parseInt(savedInv.amountText) || 5000) : 5000;
+  const durationMonths = savedInv?.months ?? 6;
+  const conservReturn = savedInv?.conservReturn ?? Math.round(rawAmount * 0.124);
+  const optimReturn   = savedInv?.optimReturn   ?? Math.round(rawAmount * 0.178);
+  const conservPct    = savedInv?.conservPct    ?? '12.4';
+  const optimPct      = savedInv?.optimPct      ?? '17.8';
+  const allocations   = savedInv?.aiPlan?.sector_allocation ?? realAllocation ?? [];
 
-  // نبني sparkline بسيط
+  const daysAgo      = savedInv ? Math.max(0, Math.floor((Date.now() - new Date(savedInv.createdAt).getTime()) / 86400000)) : 0;
+  const durationDone = Math.min(Math.max(1, Math.floor(daysAgo / 30)), durationMonths);
+  const progress     = durationMonths > 0 ? durationDone / durationMonths : 0;
+
   const sparkData = Array.from({ length: 14 }, (_, i) => {
-    const base = amount;
-    const growth = (conservReturn / amount) * (i / 13);
-    return base * (1 + growth) + (Math.random() * amount * 0.01);
+    const growth = (conservReturn / rawAmount) * (i / 13);
+    return rawAmount * (1 + growth) + (Math.random() * rawAmount * 0.01);
   });
 
-  const progress = Math.min(investmentId === 1 ? 0.5 : 0.33, 1);
-  const daysAgo  = investmentId === 1 ? 14 : 31;
-  const durationDone = investmentId === 1 ? 3 : 1;
-
   const handlePause = () => {
-    Alert.alert('Pause investment', 'Your investment will be paused. No new trades will be made until you resume.',
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Pause', onPress: () => {} }]);
+    if (paused) {
+      Alert.alert('Resume investment', 'Your investment will resume and the AI will continue trading on your behalf.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Resume', onPress: () => { setPaused(false); updateStatus('active'); } },
+      ]);
+    } else {
+      Alert.alert('Pause investment', 'Your investment will be paused. No new trades will be made until you resume.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Pause', onPress: () => { setPaused(true); updateStatus('paused'); } },
+      ]);
+    }
   };
 
   const handleStop = () => {
-    Alert.alert('Stop and withdraw', 'Are you sure? This will stop the investment and return your funds to your available balance.',
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Stop', style: 'destructive', onPress: () => navigation.goBack() }]);
+    Alert.alert('Stop and withdraw', 'Are you sure? This will stop the investment and return your funds to your available balance.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Stop', style: 'destructive', onPress: async () => {
+        await updateStatus('stopped');
+        navigation.goBack();
+      }},
+    ]);
   };
 
   if (loading) {
@@ -142,15 +191,17 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
         <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
-        <View style={styles.statusPill}>
-          <View style={styles.statusDot} />
-          <Text style={styles.statusText}>Active</Text>
+        <View style={[styles.statusPill, paused && styles.statusPillPaused]}>
+          <View style={[styles.statusDot, paused && styles.statusDotPaused]} />
+          <Text style={[styles.statusText, paused && styles.statusTextPaused]}>
+            {paused ? 'Paused' : 'Active'}
+          </Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Investment #{investmentId}</Text>
-        <Text style={styles.amount}>{amount.toLocaleString('en-US')} SAR</Text>
+        <Text style={styles.amount}>{rawAmount.toLocaleString('en-US')} SAR</Text>
         <Text style={styles.meta}>Started {daysAgo} days ago · {durationDone} of {durationMonths} months</Text>
 
         <View style={styles.progressTrack}>
@@ -158,7 +209,6 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
           <View style={{ flex: 1 - progress }} />
         </View>
 
-        {/* Growth chart */}
         <View style={styles.chartCard}>
           <Text style={styles.chartLabel}>PORTFOLIO GROWTH</Text>
           <GrowthChart data={sparkData} />
@@ -168,7 +218,6 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
           </View>
         </View>
 
-        {/* Estimated return */}
         <View style={styles.returnCard}>
           <Text style={styles.returnLabel}>ESTIMATED RETURN</Text>
           <Text style={styles.returnValue}>{conservReturn.toLocaleString('en-US')} – {optimReturn.toLocaleString('en-US')} SAR</Text>
@@ -182,7 +231,6 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
           </View>
         </View>
 
-        {/* Allocation */}
         <Text style={styles.sectionTitle}>Allocation breakdown</Text>
         <View style={styles.allocationCard}>
           {allocations.map((a: any) => {
@@ -201,7 +249,6 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
           })}
         </View>
 
-        {/* Recent activity from real transactions */}
         <Text style={styles.sectionTitle}>Recent activity</Text>
         <View style={styles.activityCard}>
           {transactions.length === 0 ? (
@@ -229,8 +276,10 @@ export default function InvestmentDetailScreen({ navigation, route }: Investment
           )}
         </View>
 
-        <TouchableOpacity style={styles.pauseBtn} onPress={handlePause} activeOpacity={0.8}>
-          <Text style={styles.pauseBtnText}>Pause investment</Text>
+        <TouchableOpacity style={[styles.pauseBtn, paused && styles.resumeBtn]} onPress={handlePause} activeOpacity={0.8}>
+          <Text style={[styles.pauseBtnText, paused && styles.resumeBtnText]}>
+            {paused ? 'Resume investment' : 'Pause investment'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.stopBtn} onPress={handleStop} activeOpacity={0.8}>
           <Text style={styles.stopBtnText}>Stop and withdraw</Text>
@@ -286,6 +335,11 @@ const styles = StyleSheet.create({
   activityDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)' },
   pauseBtn: { height: 52, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', backgroundColor: 'rgba(255,255,255,0.04)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   pauseBtnText: { color: colors.white, fontSize: 15, fontWeight: '600', opacity: 0.85 },
+  resumeBtn: { borderColor: `${colors.accent}60`, backgroundColor: `${colors.accent}12` },
+  resumeBtnText: { color: colors.accent, opacity: 1 },
+  statusPillPaused: { backgroundColor: 'rgba(245,158,11,0.15)' },
+  statusDotPaused: { backgroundColor: colors.amber },
+  statusTextPaused: { color: colors.amber },
   stopBtn: { height: 52, borderRadius: 14, borderWidth: 1, borderColor: `${colors.red}40`, backgroundColor: `${colors.red}12`, alignItems: 'center', justifyContent: 'center' },
   stopBtnText: { color: colors.red, fontSize: 15, fontWeight: '600' },
 });
