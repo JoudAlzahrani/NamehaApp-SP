@@ -21,7 +21,7 @@ interface SignInScreenProps {
 }
 
 export default function SignInScreen({ navigation }: SignInScreenProps) {
-  const { setUserId, setUser } = useApp();
+  const { setUserId, setUser, setToken } = useApp();
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -36,6 +36,7 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
     try {
       const data = await API.login(email, password);
       setUserId(data.user_id);
+      setToken(data.access_token ?? data.token ?? null);
       setUser({ name: data.name, email: data.email, initials: data.name[0], profileType: '', profileName: '' });
       await API.createPortfolio(data.user_id).catch(() => {});
       navigation.navigate('Main');

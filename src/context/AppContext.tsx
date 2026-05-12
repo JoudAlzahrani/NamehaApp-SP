@@ -9,6 +9,7 @@ import React, {
   ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { setAuthToken } from '../services/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface User {
@@ -62,6 +63,7 @@ interface AuthContextType {
   userId: string | null;
   setUser: (user: User) => void;
   setUserId: (id: string | null) => void;
+  setToken: (token: string | null) => void;
   logout: () => void;
 }
 
@@ -108,10 +110,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── Quiz State ───────────────────────────────────────────────────────────
   const [quizAnswers, setQuizAnswers] = useState<number[]>([-1, -1, -1, -1]);
 
-  // ── Load userId من AsyncStorage — لا تكتب فوق لو المستخدم سجّل دخول أسرع
+  // ── Load userId + token من AsyncStorage
   useEffect(() => {
     AsyncStorage.getItem('user_id').then(id => {
       if (id && !manuallySet.current) setUserIdState(id);
+    });
+    AsyncStorage.getItem('auth_token').then(token => {
+      if (token) setAuthToken(token);
     });
   }, []);
 
@@ -125,8 +130,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setUserIdState(id);
   }, []);
 
+  const setToken = useCallback((token: string | null) => {
+    if (token) AsyncStorage.setItem('auth_token', token);
+    else AsyncStorage.removeItem('auth_token');
+    setAuthToken(token);
+  }, []);
+
   const logout = useCallback(() => {
     AsyncStorage.removeItem('user_id');
+    AsyncStorage.removeItem('auth_token');
+    setAuthToken(null);
     setUserIdState(null);
     setUserState(null);
   }, []);
@@ -150,8 +163,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Memoized Values ───────────────────────────────────────────────────────
   const authValue = useMemo(
-    () => ({ user, userId, setUser, setUserId, logout }),
-    [user, userId, setUser, setUserId, logout]
+    () => ({ user, userId, setUser, setUserId, setToken, logout }),
+    [user, userId, setUser, setUserId, setToken, logout]
   );
 
   const portfolioValue = useMemo(
