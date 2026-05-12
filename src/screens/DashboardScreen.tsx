@@ -8,7 +8,6 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { API } from '../services/api';
 import { useAuth } from '../context/AppContext';
-import { useMarketStatus } from '../services/marketStatus';
 
 interface DashboardScreenProps {
   navigation: NativeStackNavigationProp<any>;
@@ -93,11 +92,14 @@ const ACTIVE_ALERTS = [
 export default function DashboardScreen({ navigation }: DashboardScreenProps) {
   const { userId, user } = useAuth();
   const userIdRef = useRef(userId);
-  const market = useMarketStatus('SA');
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [quotes, setQuotes] = useState<Record<string, number>>({});
+  const [discoveryQuotes, setDiscoveryQuotes] = useState<Record<string, { c: number; dp: number }>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [dismissedTickers, setDismissedTickers] = useState<Set<string>>(new Set());
+
+  const DISCOVERY_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA', '2222', '1120', '2082', 'ABBV'];
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -109,17 +111,30 @@ export default function DashboardScreen({ navigation }: DashboardScreenProps) {
     try {
       const data = await API.getPortfolio(id);
       setPortfolio(data);
-      const symbols = (data.positions ?? []).map((p: PositionItem) => p.symbol);
+      const ownedSymbols = new Set((data.positions ?? []).map((p: PositionItem) => p.symbol));
+      const portfolioSymbols = Array.from(ownedSymbols) as string[];
+      const toDiscover = DISCOVERY_SYMBOLS.filter(s => !ownedSymbols.has(s)).slice(0, 4);
+
       const quoteResults: Record<string, number> = {};
-      await Promise.all(
-        symbols.map(async (symbol: string) => {
+      const discoveryResults: Record<string, { c: number; dp: number }> = {};
+
+      await Promise.all([
+        ...portfolioSymbols.map(async (symbol: string) => {
           try {
             const q = await API.quote(symbol);
             if (q?.c) quoteResults[symbol] = q.c;
           } catch {}
-        })
-      );
+        }),
+        ...toDiscover.map(async (symbol: string) => {
+          try {
+            const q = await API.quote(symbol);
+            if (q?.c != null) discoveryResults[symbol] = { c: q.c, dp: q.dp ?? 0 };
+          } catch {}
+        }),
+      ]);
+
       setQuotes(quoteResults);
+      setDiscoveryQuotes(discoveryResults);
     } catch (e) {
       console.error('Dashboard fetch error:', e);
     } finally {
@@ -166,6 +181,37 @@ export default function DashboardScreen({ navigation }: DashboardScreenProps) {
   const totalValue = (portfolio?.cash_balance ?? 0) + totalPositionsValue;
   const sparkValues = holdingsWithValue.length ? holdingsWithValue.map(h => h.value) : [0];
 
+  const portfolioInsights = holdingsWithValue
+    .filter(h => !dismissedTickers.has(h.ticker))
+    .map(h => ({
+      ticker: h.ticker,
+      name: h.name,
+      color: h.positive ? colors.green : colors.amber,
+      title: h.positive ? 'Opportunity spotted' : 'Hold suggested',
+      description: h.positive
+        ? `${h.name} is up ${h.change.toFixed(1)}% from your purchase price. Current momentum suggests continued growth.`
+        : `${h.name} is down ${Math.abs(h.change).toFixed(1)}% from your purchase price. Consider holding and monitoring closely.`,
+      strength: Math.min(Math.round(55 + Math.abs(h.change) * 3), 100),
+    }));
+
+  const discoveryInsights = Object.entries(discoveryQuotes)
+    .filter(([sym]) => !dismissedTickers.has(sym))
+    .map(([sym, q]) => {
+      const positive = q.dp >= 0;
+      return {
+        ticker: sym,
+        name: COMPANY_NAMES[sym] ?? sym,
+        color: positive ? colors.green : colors.amber,
+        title: positive ? 'New opportunity' : 'Watch closely',
+        description: positive
+          ? `${COMPANY_NAMES[sym] ?? sym} is up ${q.dp.toFixed(1)}% today. Consider adding it to your portfolio.`
+          : `${COMPANY_NAMES[sym] ?? sym} is down ${Math.abs(q.dp).toFixed(1)}% today. Monitor before taking a position.`,
+        strength: Math.min(Math.round(50 + Math.abs(q.dp) * 5), 100),
+      };
+    });
+
+  const insights = [...portfolioInsights, ...discoveryInsights].slice(0, 4);
+
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, { alignItems: 'center', justifyContent: 'center' }]}>
@@ -200,22 +246,30 @@ export default function DashboardScreen({ navigation }: DashboardScreenProps) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
-        <View style={styles.marketStatusRow}>
-          <View style={[styles.marketDotOpen, { backgroundColor: market.isOpen ? colors.green : colors.red }]} />
-          <Text style={styles.marketStatusLabel}>{market.label}</Text>
-          <Text style={styles.marketStatusTime}>{market.statusText}</Text>
-        </View>
-
         <View style={styles.portfolioCard}>
           <Text style={styles.greeting}>{greeting()}{user?.name ? `, ${user.name}` : ''}</Text>
+          <Text style={styles.totalLabel}>Total Portfolio</Text>
           <Text style={styles.portfolioValue}>
             {totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SAR
           </Text>
           <View style={styles.changeRow}>
             <View style={styles.changeBadge}><Text style={styles.changeText}>Live</Text></View>
-            <Text style={styles.changeSub}>
-              Cash: {(portfolio?.cash_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SAR
-            </Text>
+            <Text style={styles.changeSub}>Assets + Cash</Text>
+          </View>
+          <View style={styles.breakdownRow}>
+            <View style={styles.breakdownBox}>
+              <Text style={styles.breakdownLabel}>Invested Assets</Text>
+              <Text style={styles.breakdownValue}>
+                {totalPositionsValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SAR
+              </Text>
+            </View>
+            <View style={styles.breakdownDivider} />
+            <View style={styles.breakdownBox}>
+              <Text style={styles.breakdownLabel}>Available Cash</Text>
+              <Text style={styles.breakdownValue}>
+                {(portfolio?.cash_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SAR
+              </Text>
+            </View>
           </View>
           <SimpleSparkline values={sparkValues} />
           <View style={styles.narrativeSeparator} />
@@ -244,6 +298,58 @@ export default function DashboardScreen({ navigation }: DashboardScreenProps) {
             <Text style={styles.alertBody}>{alert.body}</Text>
           </View>
         ))}
+
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Insights for you</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('AllInsights')}>
+            <Text style={styles.seeAll}>See all</Text>
+          </TouchableOpacity>
+        </View>
+
+        {insights.length === 0 ? (
+          <View style={styles.insightPlaceholder}>
+            <Text style={styles.insightPlaceholderText}>✦ No insights yet</Text>
+            <Text style={styles.insightPlaceholderSub}>Start trading to get personalized insights</Text>
+          </View>
+        ) : (
+          insights.map(insight => (
+            <View key={insight.ticker} style={styles.insightCard}>
+              <View style={styles.insightHeader}>
+                <View style={styles.insightTickerRow}>
+                  <View style={[styles.insightDot, { backgroundColor: insight.color }]} />
+                  <Text style={[styles.insightName, { color: insight.color }]}>{insight.name}</Text>
+                </View>
+                <View style={[styles.insightTag, { backgroundColor: `${insight.color}1A` }]}>
+                  <Text style={[styles.insightTagText, { color: insight.color }]}>{insight.title}</Text>
+                </View>
+              </View>
+              <Text style={styles.insightDesc}>{insight.description}</Text>
+              <View style={styles.insightStrengthRow}>
+                <Text style={styles.insightStrengthLabel}>Signal strength</Text>
+                <View style={styles.insightStrengthTrack}>
+                  <View style={[styles.insightStrengthFill, { width: `${insight.strength}%` as any, backgroundColor: insight.color }]} />
+                </View>
+                <Text style={styles.insightStrengthValue}>{insight.strength}%</Text>
+              </View>
+              <View style={styles.insightActions}>
+                <TouchableOpacity
+                  style={styles.insightReviewBtn}
+                  onPress={() => navigation.navigate('AIAnalysis', { ticker: insight.ticker })}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.insightReviewText}>Review</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.insightDismissBtn}
+                  onPress={() => setDismissedTickers(prev => new Set([...prev, insight.ticker]))}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.insightDismissText}>Dismiss</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>My holdings</Text>
@@ -280,18 +386,6 @@ export default function DashboardScreen({ navigation }: DashboardScreenProps) {
             ))
           )}
         </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Insights for you</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('AllInsights')}>
-            <Text style={styles.seeAll}>See all</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.insightPlaceholder}>
-          <Text style={styles.insightPlaceholderText}>✦ AI insights coming soon</Text>
-          <Text style={styles.insightPlaceholderSub}>NAMEHA is analyzing your portfolio</Text>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -319,6 +413,12 @@ const styles = StyleSheet.create({
   changeBadge: { backgroundColor: `${colors.green}1A`, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
   changeText: { color: colors.green, fontSize: 14, fontWeight: '700' },
   changeSub: { color: colors.gray500, fontSize: 14 },
+  totalLabel: { color: colors.gray400, fontSize: 13, fontWeight: '500', marginBottom: 2 },
+  breakdownRow: { flexDirection: 'row', marginTop: 16, marginBottom: 4, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, overflow: 'hidden' },
+  breakdownBox: { flex: 1, padding: 12 },
+  breakdownDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginVertical: 8 },
+  breakdownLabel: { color: colors.gray500, fontSize: 10, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 },
+  breakdownValue: { color: colors.white, fontSize: 13, fontWeight: '700' },
   narrativeSeparator: { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)', marginTop: 12 },
   narrativeText: { color: colors.gray500, fontSize: 12, fontStyle: 'italic', paddingTop: 10 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
@@ -345,4 +445,22 @@ const styles = StyleSheet.create({
   insightPlaceholder: { backgroundColor: colors.bgSecondary, borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 24 },
   insightPlaceholderText: { color: colors.accent, fontSize: 15, fontWeight: '700', marginBottom: 8 },
   insightPlaceholderSub: { color: colors.gray500, fontSize: 13 },
+  insightCard: { backgroundColor: colors.bgSecondary, borderRadius: 16, padding: 20, marginBottom: 12 },
+  insightHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  insightTickerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  insightDot: { width: 8, height: 8, borderRadius: 4 },
+  insightName: { fontSize: 15, fontWeight: '700', flex: 1 },
+  insightTag: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  insightTagText: { fontSize: 11, fontWeight: '700' },
+  insightDesc: { color: colors.gray400, fontSize: 13, lineHeight: 21, marginBottom: 14 },
+  insightStrengthRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  insightStrengthLabel: { color: colors.gray500, fontSize: 12, fontWeight: '500' },
+  insightStrengthTrack: { flex: 1, height: 5, backgroundColor: colors.gray800, borderRadius: 3, overflow: 'hidden' },
+  insightStrengthFill: { height: '100%', borderRadius: 3 },
+  insightStrengthValue: { color: colors.gray400, fontSize: 12, fontWeight: '700' },
+  insightActions: { flexDirection: 'row', gap: 8 },
+  insightReviewBtn: { flex: 1, height: 42, backgroundColor: colors.accent, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  insightReviewText: { color: colors.bg, fontSize: 14, fontWeight: '700' },
+  insightDismissBtn: { height: 42, paddingHorizontal: 18, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  insightDismissText: { color: colors.gray300, fontSize: 14, fontWeight: '600' },
 });

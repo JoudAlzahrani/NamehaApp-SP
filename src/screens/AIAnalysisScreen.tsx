@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { colors } from '../theme/colors';
-import { API } from '../services/api';
+import { API, BASE_URL } from '../services/api';
 import { useAuth } from '../context/AppContext';
 import { useMarketStatus } from '../services/marketStatus';
 
@@ -15,7 +15,7 @@ interface AIAnalysisScreenProps {
   navigation: NativeStackNavigationProp<any>;
   route: RouteProp<any>;
 }
-const BASE_URL = 'http://172.30.55.184:8000';
+
 const TIME_PERIODS = ['Today', 'This week', 'This month', '3 months'];
 const SCENARIOS = ['If I buy', 'If I sell', 'If I hold'];
 
@@ -34,8 +34,6 @@ const COMPANY_NAMES: Record<string, string> = {
   'VZ': 'Verizon Communications', 'TMUS': 'T-Mobile',
 };
 
-// ── Chart ──────────────────────────────────────────────────────────────────────
-
 function lerpColor(t: number): string {
   const r = Math.round(139 + (0 - 139) * t);
   const g = Math.round(92 + (229 - 92) * t);
@@ -50,28 +48,20 @@ function LineChart({ data }: { data: number[] }) {
   const max = Math.max(...data);
   const range = max - min || 1;
   const pad = 8;
-
   const points = data.map((v, i) => ({
     x: (i / (data.length - 1)) * containerWidth,
     y: (1 - (v - min) / range) * (height - pad * 2) + pad,
   }));
-
   const segments = points.slice(0, -1).map((p, i) => {
     const next = points[i + 1];
-    const dx = next.x - p.x;
-    const dy = next.y - p.y;
+    const dx = next.x - p.x, dy = next.y - p.y;
     const len = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-    return { midX: (p.x + next.x) / 2, midY: (p.y + next.y) / 2, len, angle, color: lerpColor(i / (data.length - 2)) };
+    return { midX: (p.x + next.x) / 2, midY: (p.y + next.y) / 2, len, angle: Math.atan2(dy, dx) * (180 / Math.PI), color: lerpColor(i / (data.length - 2)) };
   });
-
   const last = points[points.length - 1];
-
   return (
     <View style={{ height, position: 'relative', overflow: 'hidden' }} onLayout={e => setContainerWidth(e.nativeEvent.layout.width)}>
-      {segments.map((seg, i) => (
-        <View key={i} style={{ position: 'absolute', left: seg.midX - seg.len / 2, top: seg.midY - 1.5, width: seg.len, height: 3, backgroundColor: seg.color, borderRadius: 1.5, transform: [{ rotate: `${seg.angle}deg` }] }} />
-      ))}
+      {segments.map((seg, i) => <View key={i} style={{ position: 'absolute', left: seg.midX - seg.len / 2, top: seg.midY - 1.5, width: seg.len, height: 3, backgroundColor: seg.color, borderRadius: 1.5, transform: [{ rotate: `${seg.angle}deg` }] }} />)}
       <View style={{ position: 'absolute', left: last.x - 5, top: last.y - 5, width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent, borderWidth: 2, borderColor: colors.bg }} />
     </View>
   );
@@ -94,8 +84,6 @@ function RingProgress({ percent, size = 48, strokeWidth = 4 }: { percent: number
   );
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
-
 export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreenProps) {
   const { userId, user } = useAuth();
   const ticker = (route?.params?.ticker || 'AAPL').toUpperCase();
@@ -109,12 +97,10 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(true);
   const [proposing, setProposing] = useState(false);
-
   const [quote, setQuote] = useState<any>(null);
   const [aiResult, setAiResult] = useState<any>(null);
   const [chartData, setChartData] = useState<number[]>([120, 121, 119, 122, 123, 122, 124, 125, 124, 126]);
 
-  // نجيب السعر أول بسرعة
   useEffect(() => {
     let active = true;
     const loadQuote = async () => {
@@ -133,7 +119,6 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
     return () => { active = false; };
   }, [ticker]);
 
-  // نشغّل الـ AI بشكل منفصل لأنه يأخذ وقت أطول
   useEffect(() => {
     let active = true;
     const loadAI = async () => {
@@ -144,19 +129,14 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ticker,
-            scenario: scenarioMap[activeScenario],
-            user_id: userId ?? '',
-            user_name: user?.name ?? '',
-            amount_sar: 5000,
-            market,
+            ticker, scenario: scenarioMap[activeScenario],
+            user_id: userId ?? '', user_name: user?.name ?? '',
+            amount_sar: 5000, market,
           }),
         });
         const data = await res.json();
         if (!active) return;
-        if (data?.success && data?.data) {
-          setAiResult(data.data);
-        }
+        if (data?.success && data?.data) setAiResult(data.data);
       } catch {}
       finally { if (active) setAiLoading(false); }
     };
@@ -166,11 +146,10 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
 
   const dayChangePct = quote?.pc ? ((quote.c - quote.pc) / quote.pc * 100) : null;
   const positive = (dayChangePct ?? 0) >= 0;
-
   const opportunitySpotted = aiResult?.opportunity_spotted ?? positive;
   const confidence = (aiResult?.signal_confidence?.score_pct ?? 78) / 100;
 
-  const signals = aiResult?.signals ?? [
+  const indicators = aiResult?.signals ?? [
     { category: 'Price direction', description: positive ? 'Rising steadily' : 'Watch for reversal', label: positive ? 'Positive' : 'Negative' },
     { category: 'Day change', description: dayChangePct !== null ? `${dayChangePct.toFixed(2)}% today` : '—', label: 'Live' },
     { category: 'Price range today', description: quote ? `${quote.l?.toFixed(2)} – ${quote.h?.toFixed(2)}` : 'Analyzing...', label: 'Neutral' },
@@ -195,21 +174,14 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
     setProposing(true);
     try {
       const proposal = await API.requestProposal(userId ?? '', ticker, 1000);
-      navigation.navigate('OrderEntry', {
-        ticker,
-        mode: activeScenario === 0 ? 'buy' : 'sell',
-        ...(proposal?.proposal_id ? { proposalId: proposal.proposal_id } : {}),
-      });
+      navigation.navigate('OrderEntry', { ticker, mode: activeScenario === 0 ? 'buy' : 'sell', ...(proposal?.proposal_id ? { proposalId: proposal.proposal_id } : {}) });
     } catch {
       navigation.navigate('OrderEntry', { ticker, mode: activeScenario === 0 ? 'buy' : 'sell' });
-    } finally {
-      setProposing(false);
-    }
+    } finally { setProposing(false); }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Top Bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
           <Text style={styles.backText}>← Back</Text>
@@ -226,10 +198,8 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-
-        {/* Price */}
         <View style={styles.marketRow}>
-          <View style={[styles.greenDot, { backgroundColor: marketStatus.isOpen ? colors.green : colors.red }]} />
+          <View style={[styles.statusDot, { backgroundColor: marketStatus.isOpen ? colors.green : colors.red }]} />
           <Text style={styles.marketOpenText}>{marketStatus.label}</Text>
           <Text style={styles.marketCloseTime}>  {marketStatus.statusText}</Text>
         </View>
@@ -250,9 +220,7 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
           </>
         )}
 
-        <View style={styles.chartContainer}>
-          <LineChart data={chartData} />
-        </View>
+        <View style={styles.chartContainer}><LineChart data={chartData} /></View>
 
         <View style={styles.timePillsRow}>
           {TIME_PERIODS.map((p, i) => (
@@ -287,9 +255,9 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
           )}
         </View>
 
-        {/* What's driving this */}
-        <Text style={styles.sectionTitle}>What's driving this</Text>
-        {signals.map((d: any, i: number) => (
+        {/* Market Indicators */}
+        <Text style={styles.sectionTitle}>Market indicators</Text>
+        {indicators.map((d: any, i: number) => (
           <View key={i} style={[styles.glassCard, styles.driverCard]}>
             <View style={[styles.driverIcon, { backgroundColor: `${colors.accent}20` }]}>
               <Text style={[styles.driverIconGlyph, { color: colors.accent }]}>
@@ -312,9 +280,7 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
           <View style={styles.riskTopRow}>
             <Text style={styles.riskBasedText}>Based on your portfolio and goals</Text>
             <View style={[styles.tagPill, { backgroundColor: `${colors.amber}1A` }]}>
-              <Text style={[styles.tagPillText, { color: colors.amber }]}>
-                {aiResult?.risk?.level ?? 'Medium'}
-              </Text>
+              <Text style={[styles.tagPillText, { color: colors.amber }]}>{aiResult?.risk?.level ?? 'Medium'}</Text>
             </View>
           </View>
           <View style={styles.riskSegmentsRow}>
@@ -361,12 +327,12 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
           </Text>
         </View>
 
-        {/* Confidence */}
-        <Text style={styles.sectionTitle}>How reliable is this signal?</Text>
+        {/* Indicator Reliability */}
+        <Text style={styles.sectionTitle}>How reliable is this indicator?</Text>
         <View style={styles.glassCard}>
           <View style={styles.confidenceTopRow}>
             <View>
-              <Text style={styles.confidenceLabel}>Signal confidence</Text>
+              <Text style={styles.confidenceLabel}>Indicator confidence</Text>
               <Text style={styles.confidencePercent}>{Math.round(confidence * 100)}%</Text>
             </View>
             <RingProgress percent={confidence} size={48} strokeWidth={4} />
@@ -378,10 +344,8 @@ export default function AIAnalysisScreen({ navigation, route }: AIAnalysisScreen
             {aiResult?.signal_confidence?.explanation ?? `In similar market conditions, this pattern played out as expected about ${Math.round(confidence * 100)} times out of 100. The final call is always yours.`}
           </Text>
         </View>
-
       </ScrollView>
 
-      {/* Footer */}
       <View style={styles.footer}>
         <TouchableOpacity style={styles.footerGhostBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           <Text style={styles.footerGhostBtnText}>Go back</Text>
@@ -409,7 +373,7 @@ const styles = StyleSheet.create({
   opportunityPillText: { fontSize: 11, fontWeight: '600' },
   scroll: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 28 },
   marketRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  greenDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: colors.green, marginRight: 6 },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 6 },
   marketOpenText: { color: colors.white, fontSize: 13, fontWeight: '700' },
   marketCloseTime: { color: colors.gray500, fontSize: 13 },
   priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10, marginBottom: 4 },

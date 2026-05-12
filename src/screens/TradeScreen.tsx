@@ -103,10 +103,31 @@ const SECTOR_STOCKS: Record<string, Stock[]> = {
   ],
 };
 
+function MarketBadge({ label, status }: { label: string; status: { isOpen: boolean; statusText: string } }) {
+  const color = status.isOpen ? colors.green : colors.red;
+  return (
+    <View style={[badge.wrap, { borderColor: `${color}30`, backgroundColor: `${color}10` }]}>
+      <View style={[badge.dot, { backgroundColor: color }]} />
+      <View>
+        <Text style={[badge.label, { color }]}>{label}</Text>
+        <Text style={badge.sub}>{status.statusText}</Text>
+      </View>
+    </View>
+  );
+}
+
+const badge = StyleSheet.create({
+  wrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, padding: 10 },
+  dot: { width: 7, height: 7, borderRadius: 3.5, flexShrink: 0 },
+  label: { fontSize: 12, fontWeight: '700', marginBottom: 1 },
+  sub: { color: colors.gray500, fontSize: 11 },
+});
+
 export default function TradeScreen({ navigation }: TradeScreenProps) {
   const [search, setSearch] = useState('');
   const [selectedSector, setSelectedSector] = useState<Sector | null>(null);
-  const marketStatus = useMarketStatus('SA');
+  const usMarket = useMarketStatus('US');
+  const saMarket = useMarketStatus('SA');
 
   if (selectedSector) {
     const stocks = (SECTOR_STOCKS[selectedSector.id] ?? []).filter(
@@ -135,7 +156,9 @@ export default function TradeScreen({ navigation }: TradeScreenProps) {
           {/* US Stocks */}
           {stocks.filter(stock => stock.market === 'US').length > 0 && (
             <>
-              <Text style={styles.marketLabel}>🇺🇸 US Market</Text>
+              <View style={[styles.marketStatusRow, { marginBottom: 10 }]}>
+                <MarketBadge label="🇺🇸 US Market" status={usMarket} />
+              </View>
               <View style={styles.stockList}>
                 {stocks.filter(stock => stock.market === 'US').map((stock, index, array) => (
                   <View key={stock.ticker}>
@@ -163,7 +186,9 @@ export default function TradeScreen({ navigation }: TradeScreenProps) {
           {/* Saudi Stocks */}
           {stocks.filter(stock => stock.market === 'SA').length > 0 && (
             <>
-              <Text style={[styles.marketLabel, { marginTop: 20 }]}>🇸🇦 Tadawul</Text>
+              <View style={[styles.marketStatusRow, { marginTop: 20, marginBottom: 10 }]}>
+                <MarketBadge label="🇸🇦 Tadawul" status={saMarket} />
+              </View>
               <View style={styles.stockList}>
                 {stocks.filter(stock => stock.market === 'SA').map((stock, index, array) => (
                   <View key={stock.ticker}>
@@ -197,9 +222,9 @@ export default function TradeScreen({ navigation }: TradeScreenProps) {
       <ScrollView contentContainerStyle={styles.sectorsScroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Trade</Text>
 
-        <View style={styles.marketPill}>
-          <View style={[styles.marketDot, { backgroundColor: marketStatus.isOpen ? colors.green : colors.red }]} />
-          <Text style={styles.marketPillText}>{marketStatus.label} · {marketStatus.statusText}</Text>
+        <View style={styles.marketStatusRow}>
+          <MarketBadge label="🇺🇸 US Market" status={usMarket} />
+          <MarketBadge label="🇸🇦 Tadawul" status={saMarket} />
         </View>
 
         <View style={styles.searchWrapper}>
@@ -241,7 +266,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   sectorsScroll: { paddingHorizontal: 20, paddingTop: 52, paddingBottom: 32 },
   title: { color: colors.white, fontSize: 32, fontWeight: '700', marginBottom: 16 },
-  marketPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: 'rgba(16,185,129,0.12)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(16,185,129,0.25)', paddingHorizontal: 12, paddingVertical: 6, gap: 7, marginBottom: 18 },
+  marketStatusRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
   marketDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.green },
   marketPillText: { color: colors.green, fontSize: 13, fontWeight: '500' },
   searchWrapper: { flexDirection: 'row', alignItems: 'center', height: 52, backgroundColor: GLASS_BG, borderRadius: 14, borderWidth: 1, borderColor: GLASS_BORDER, paddingHorizontal: 16, gap: 10, marginBottom: 28 },

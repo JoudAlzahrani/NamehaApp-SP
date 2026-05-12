@@ -9,6 +9,7 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -141,6 +142,7 @@ const donutStyles = StyleSheet.create({
 export default function PortfolioScreen({ navigation }: PortfolioScreenProps) {
   const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { userId } = useAuth();
   const userIdRef = useRef(userId);
@@ -161,6 +163,22 @@ export default function PortfolioScreen({ navigation }: PortfolioScreenProps) {
       setError('Failed to load portfolio');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    const id = userIdRef.current ?? '';
+    if (!id) return;
+    setRefreshing(true);
+    API.clearUserCache(id);
+    try {
+      const data = await API.getPortfolio(id);
+      setPortfolio(data);
+      setError(null);
+    } catch {
+      setError('Failed to load portfolio');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -231,7 +249,11 @@ export default function PortfolioScreen({ navigation }: PortfolioScreenProps) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+      >
         <Text style={styles.title}>Portfolio</Text>
 
         <View style={styles.valueCard}>
@@ -239,7 +261,20 @@ export default function PortfolioScreen({ navigation }: PortfolioScreenProps) {
           <Text style={styles.totalValue}>{formatSar(totalPortfolioValue)}</Text>
           <View style={styles.gainRow}>
             <View style={styles.gainBadge}><Text style={styles.gainText}>Live</Text></View>
-            <Text style={styles.gainSub}>Cash + positions</Text>
+            <Text style={styles.gainSub}>Assets + Cash combined</Text>
+          </View>
+          <View style={styles.breakdownRow}>
+            <View style={styles.breakdownBox}>
+              <Text style={styles.breakdownLabel}>Invested Assets</Text>
+              <Text style={styles.breakdownValue}>{formatSar(totalPositionsValue)}</Text>
+              <Text style={styles.breakdownSub}>Stocks & holdings</Text>
+            </View>
+            <View style={styles.breakdownDivider} />
+            <View style={styles.breakdownBox}>
+              <Text style={styles.breakdownLabel}>Available Cash</Text>
+              <Text style={styles.breakdownValue}>{formatSar(portfolio?.cash_balance)}</Text>
+              <Text style={styles.breakdownSub}>Ready to invest</Text>
+            </View>
           </View>
           <SimpleDonut positions={donutData} />
         </View>
@@ -319,6 +354,12 @@ const styles = StyleSheet.create({
   valueLabel: { color: colors.gray400, fontSize: 14, fontWeight: '500', marginBottom: 8 },
   totalValue: { color: colors.white, fontSize: 36, fontWeight: '700', letterSpacing: -1, marginBottom: 12 },
   gainRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  breakdownRow: { flexDirection: 'row', marginTop: 16, marginBottom: 4, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, overflow: 'hidden' },
+  breakdownBox: { flex: 1, padding: 12 },
+  breakdownDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginVertical: 8 },
+  breakdownLabel: { color: colors.gray500, fontSize: 10, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 },
+  breakdownValue: { color: colors.white, fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  breakdownSub: { color: colors.gray600, fontSize: 11 },
   gainBadge: { backgroundColor: `${colors.green}1A`, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
   gainText: { color: colors.green, fontSize: 14, fontWeight: '700' },
   gainSub: { color: colors.gray500, fontSize: 13 },

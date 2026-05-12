@@ -21,10 +21,10 @@ interface RegisterScreenProps {
   navigation: NativeStackNavigationProp<any>;
 }
 
-const BASE_URL = 'http://172.30.55.184:8000';
+import { BASE_URL } from '../services/api';
 
 export default function RegisterScreen({ navigation }: RegisterScreenProps) {
-  const { setUserId, setUser } = useApp();
+  const { setUserId, setUser, setToken } = useApp();
   const [showPassword, setShowPassword]       = useState(false);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   const [name, setName]         = useState('');
@@ -68,6 +68,7 @@ export default function RegisterScreen({ navigation }: RegisterScreenProps) {
       }
 
       setUserId(data.user_id);
+      setToken(data.access_token ?? data.token ?? null);
       setUser({
         name:        data.name,
         email:       data.email,

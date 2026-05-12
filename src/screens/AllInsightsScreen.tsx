@@ -33,21 +33,23 @@ export default function AllInsightsScreen({ navigation }: AllInsightsScreenProps
   const [insights, setInsights] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const DISCOVERY_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'GOOGL', 'AMZN', '2222', '1120', '2082', 'ABBV', 'XOM', 'JPM'];
+
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
         const portfolio = await API.getPortfolio(userId ?? '');
         const positions = portfolio?.positions ?? [];
+        const ownedSymbols = new Set(positions.map((p: any) => p.symbol));
 
-        const insightList = await Promise.all(
+        const portfolioInsights = await Promise.all(
           positions.map(async (p: any) => {
             try {
               const q = await API.quote(p.symbol);
               const currentPrice = q?.c ?? p.avg_price;
               const change = p.avg_price ? ((currentPrice - p.avg_price) / p.avg_price) * 100 : 0;
               const positive = change >= 0;
-
               return {
                 ticker: p.symbol,
                 name: COMPANY_NAMES[p.symbol] ?? p.symbol,
@@ -59,13 +61,35 @@ export default function AllInsightsScreen({ navigation }: AllInsightsScreenProps
                   : `${COMPANY_NAMES[p.symbol] ?? p.symbol} is down ${Math.abs(change).toFixed(1)}% from your purchase price. Consider holding and monitoring closely.`,
                 change,
               };
-            } catch {
-              return null;
-            }
+            } catch { return null; }
           })
         );
 
-        setInsights(insightList.filter(Boolean));
+        const toDiscover = DISCOVERY_SYMBOLS.filter(s => !ownedSymbols.has(s));
+        const discoveryInsights = await Promise.all(
+          toDiscover.map(async (symbol: string) => {
+            try {
+              const q = await API.quote(symbol);
+              if (!q?.c) return null;
+              const dp = q.dp ?? 0;
+              const positive = dp >= 0;
+              return {
+                ticker: symbol,
+                name: COMPANY_NAMES[symbol] ?? symbol,
+                color: positive ? colors.green : colors.amber,
+                strength: Math.min(Math.round(50 + Math.abs(dp) * 5), 100),
+                title: positive ? 'New opportunity' : 'Watch closely',
+                description: positive
+                  ? `${COMPANY_NAMES[symbol] ?? symbol} is up ${dp.toFixed(1)}% today. Consider adding it to your portfolio.`
+                  : `${COMPANY_NAMES[symbol] ?? symbol} is down ${Math.abs(dp).toFixed(1)}% today. Monitor before taking a position.`,
+                change: dp,
+              };
+            } catch { return null; }
+          })
+        );
+
+        const all = [...portfolioInsights, ...discoveryInsights].filter(Boolean);
+        setInsights(all);
       } catch {}
       finally { setLoading(false); }
     };
