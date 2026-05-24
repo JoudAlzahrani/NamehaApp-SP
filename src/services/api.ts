@@ -1,5 +1,5 @@
 // ── تغيير الـ IP هنا فقط ─────────────────────────────────────────────────────
-export const BASE_URL = 'http://10.24.144.54:8000';
+export const BASE_URL = 'http://10.24.143.136:8000';
 const FINNHUB_KEY = 'd6d85h1r01qgk7mkutb0d6d85h1r01qgk7mkutbg';
 
 // ── Auth Token ────────────────────────────────────────────────────────────────
@@ -72,6 +72,20 @@ export const API = {
     const res = await fetchWithTimeout(`${BASE_URL}/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password}) }, 15000);
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'فشل تسجيل الدخول');
+    return data;
+  },
+
+  forgotPassword: async (email: string) => {
+    const res = await fetchWithTimeout(`${BASE_URL}/auth/forgot-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) }, 15000);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'فشل إرسال طلب إعادة تعيين كلمة المرور');
+    return data;
+  },
+
+  resetPassword: async (token: string, newPassword: string) => {
+    const res = await fetchWithTimeout(`${BASE_URL}/auth/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, new_password: newPassword}) }, 15000);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'فشل تغيير كلمة المرور');
     return data;
   },
 

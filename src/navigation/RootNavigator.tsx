@@ -7,6 +7,8 @@ import SplashScreen from '../screens/SplashScreen';
 import WelcomeScreen from '../screens/WelcomeScreen';
 import SignInScreen from '../screens/SignInScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
+import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 
 // ── تحميل كسول - باقي الشاشات ─────────────────────────────────────────────
 const OnboardingScreen        = lazy(() => import('../screens/OnboardingScreen'));
@@ -52,6 +54,8 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Register: undefined;
   SignIn: undefined;
+  ForgotPassword: undefined;
+  ResetPassword: { token: string };
   QuizIntro: undefined;
   QuizQuestion: { questionIndex: number; answers: number[] };
   QuizResult: { answers: number[] };
@@ -89,10 +93,12 @@ export default function RootNavigator() {
       }}
     >
       {/* ── تحميل فوري ── */}
-      <Stack.Screen name="Splash"    component={SplashScreen}   options={{ animation: 'none' }} />
-      <Stack.Screen name="Welcome"   component={WelcomeScreen} />
-      <Stack.Screen name="SignIn"    component={SignInScreen} />
-      <Stack.Screen name="Register"  component={RegisterScreen} />
+      <Stack.Screen name="Splash"          component={SplashScreen}          options={{ animation: 'none' }} />
+      <Stack.Screen name="Welcome"         component={WelcomeScreen} />
+      <Stack.Screen name="SignIn"          component={SignInScreen} />
+      <Stack.Screen name="Register"        component={RegisterScreen} />
+      <Stack.Screen name="ForgotPassword"  component={ForgotPasswordScreen} />
+      <Stack.Screen name="ResetPassword"   component={ResetPasswordScreen} />
 
       {/* ── تحميل كسول ── */}
       <Stack.Screen name="Onboarding"          component={withSuspense(OnboardingScreen)} />

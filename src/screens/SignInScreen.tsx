@@ -102,7 +102,7 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
         {/* Forgot Password */}
         <TouchableOpacity
           style={styles.forgotRow}
-          onPress={() => Alert.alert('Password Reset', 'Password reset functionality will be available soon.')}
+          onPress={() => navigation.navigate('ForgotPassword')}
         >
           <Text style={styles.forgotText}>Forgot Password?</Text>
         </TouchableOpacity>
